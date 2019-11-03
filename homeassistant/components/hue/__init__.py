@@ -1,6 +1,7 @@
 """Support for the Philips Hue system."""
 import ipaddress
 import logging
+import asyncio
 
 import voluptuous as vol
 
@@ -8,7 +9,8 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_FILENAME, CONF_HOST
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 
-from .bridge import HueBridge
+from .bridge import (HueBridge, SERVICE_HUE_SCENE,
+                     SCENE_SCHEMA, ATTR_GROUP_NAME, ATTR_SCENE_NAME)
 from .config_flow import (
     configured_hosts,
 )  # Loading the config flow file will register the flow
@@ -59,6 +61,30 @@ CONFIG_SCHEMA = vol.Schema(
 
 async def async_setup(hass, config):
     """Set up the Hue platform."""
+    async def hue_activate_scene(call, skip_reload=True):
+        """Handle activation of Hue scene."""
+        # Get parameters
+        group_name = call.data[ATTR_GROUP_NAME]
+        scene_name = call.data[ATTR_SCENE_NAME]
+
+        # Call the set scene function on each bridge
+        tasks = [bridge.hue_activate_scene(call,
+                                           updated=skip_reload,
+                                           hide_warnings=skip_reload)
+                 for bridge in hass.data[DOMAIN].values()
+                 if isinstance(bridge, HueBridge)]
+        results = await asyncio.gather(*tasks)
+
+        # Did *any* bridge succeed? If not, refresh / retry
+        # Note that we'll get a "None" value for a successful call
+        if None not in results:
+            if skip_reload:
+                return await hue_activate_scene(call,
+                                                skip_reload=False)
+            _LOGGER.warning("No bridge was able to activate "
+                            "scene %s in group %s", scene_name, group_name)
+
+    # Set up the Hue platform.
     conf = config.get(DOMAIN)
     if conf is None:
         conf = {}
@@ -66,6 +92,11 @@ async def async_setup(hass, config):
     hass.data[DOMAIN] = {}
     hass.data[DATA_CONFIGS] = {}
     configured = configured_hosts(hass)
+
+    # Register a local handler for scene activation
+    hass.services.async_register(
+        DOMAIN, SERVICE_HUE_SCENE, hue_activate_scene,
+        schema=SCENE_SCHEMA)
 
     # User has configured bridges
     if CONF_BRIDGES not in conf:
@@ -144,4 +175,5 @@ async def async_setup_entry(hass, entry):
 async def async_unload_entry(hass, entry):
     """Unload a config entry."""
     bridge = hass.data[DOMAIN].pop(entry.data["host"])
+    hass.services.async_remove(DOMAIN, SERVICE_HUE_SCENE)
     return await bridge.async_reset()
