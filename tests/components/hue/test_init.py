@@ -59,6 +59,8 @@ async def test_setup_defined_hosts_known_auth(hass):
     # Flow started for discovered bridge
     assert len(hass.config_entries.flow.async_progress()) == 1
 
+    assert len(hass.services.async_services()) == 1
+
     # Config stored for domain.
     assert hass.data[hue.DATA_CONFIGS] == {
         "0.0.0.0": {
@@ -68,6 +70,130 @@ async def test_setup_defined_hosts_known_auth(hass):
         },
         "1.1.1.1": {hue.CONF_HOST: "1.1.1.1"},
     }
+
+
+GROUP_RESPONSE = {
+    "1": {
+        "name": "Group 1",
+        "lights": ["1", "2"],
+        "type": "LightGroup",
+        "action": {
+            "on": True,
+            "bri": 254,
+            "hue": 10000,
+            "sat": 254,
+            "effect": "none",
+            "xy": [0.5, 0.5],
+            "ct": 250,
+            "alert": "select",
+            "colormode": "ct",
+        },
+        "state": {"any_on": True, "all_on": False},
+    },
+    "2": {
+        "name": "Group 2",
+        "lights": ["3", "4", "5"],
+        "type": "LightGroup",
+        "action": {
+            "on": True,
+            "bri": 153,
+            "hue": 4345,
+            "sat": 254,
+            "effect": "none",
+            "xy": [0.5, 0.5],
+            "ct": 250,
+            "alert": "select",
+            "colormode": "ct",
+        },
+        "state": {"any_on": True, "all_on": False},
+    },
+}
+
+
+async def test_setup_multiple(hass, mock_bridge):
+    """Test we don't initiate a config entry if config bridge is known."""
+    MockConfigEntry(domain="hue", data={"host": "0.0.0.0"}).add_to_hass(hass)
+
+    with patch.object(hue, "async_setup_entry", return_value=True):
+        assert (
+            await async_setup_component(
+                hass,
+                hue.DOMAIN,
+                {
+                    hue.DOMAIN: {
+                        hue.CONF_BRIDGES: [
+                            {
+                                hue.CONF_HOST: "0.0.0.0",
+                                hue.CONF_ALLOW_HUE_GROUPS: True,
+                                hue.CONF_ALLOW_UNREACHABLE: True,
+                            },
+                            {hue.CONF_HOST: "1.1.1.1"},
+                        ]
+                    }
+                },
+            )
+            is True
+        )
+
+    mock_bridge.allow_groups = True
+    mock_bridge.mock_light_responses.append({})
+    mock_bridge.mock_group_responses.append(GROUP_RESPONSE)
+
+    await setup_bridge(hass, mock_bridge)
+
+    # mock_bridge2 = create_mock_bridge(hass)
+    # mock_bridge2.allow_groups = True
+    # mock_bridge2.mock_light_responses.append({})
+    # mock_bridge2.mock_group_responses.append({})
+
+    # await setup_bridge(hass, mock_bridge2)
+
+    # Flow started for discovered bridge
+    #    assert len(hass.config_entries.flow.async_progress()) == 1
+
+    assert len(hass.services.async_services()) == 2
+
+    # Config stored for domain.
+    assert hass.data[hue.DATA_CONFIGS] == {
+        "0.0.0.0": {
+            hue.CONF_HOST: "0.0.0.0",
+            hue.CONF_ALLOW_HUE_GROUPS: True,
+            hue.CONF_ALLOW_UNREACHABLE: True,
+        },
+        "1.1.1.1": {hue.CONF_HOST: "1.1.1.1"},
+    }
+
+    await hass.services.async_call(
+        "hue",
+        "hue_activate_scene",
+        {"group_name": "group_1", "scene_name": "my_scene"},
+        blocking=True,
+    )
+
+    #    assert len(hass.states.async_all()) == 2
+
+    new_group = hass.states.get("light.group_1")
+    assert new_group is not None
+    assert new_group.state == "on"
+
+
+async def setup_bridge(hass, mock_bridge):
+    """Load the Hue light platform with the provided bridge."""
+    hass.config.components.add(hue.DOMAIN)
+    config_entry = config_entries.ConfigEntry(
+        1,
+        hue.DOMAIN,
+        "Mock Title",
+        {"host": "mock-host"},
+        "test",
+        config_entries.CONN_CLASS_LOCAL_POLL,
+        system_options={},
+    )
+    mock_bridge.config_entry = config_entry
+    hass.data[hue.DOMAIN] = {config_entry.entry_id: mock_bridge}
+    await hass.config_entries.async_forward_entry_setup(config_entry, "light")
+    # To flush out the service call to update the group
+    await hass.async_block_till_done()
 
 
 async def test_setup_defined_hosts_no_known_auth(hass):
@@ -252,3 +378,42 @@ async def test_security_vuln_check(hass):
     state = hass.states.get("persistent_notification.hue_hub_firmware")
     assert state is not None
     assert "CVE-2020-6007" in state.attributes["message"]
+
+
+async def test_setup_multiple_defined_hosts(hass):
+    """Test we don't initiate a config entry if config bridge is known."""
+    MockConfigEntry(domain="hue", data={"host": "0.0.0.0"}).add_to_hass(hass)
+
+    with patch.object(hue, "async_setup_entry", return_value=True):
+        assert (
+            await async_setup_component(
+                hass,
+                hue.DOMAIN,
+                {
+                    hue.DOMAIN: {
+                        hue.CONF_BRIDGES: [
+                            {
+                                hue.CONF_HOST: "0.0.0.0",
+                                hue.CONF_ALLOW_HUE_GROUPS: False,
+                                hue.CONF_ALLOW_UNREACHABLE: True,
+                            },
+                            {hue.CONF_HOST: "1.1.1.1"},
+                        ]
+                    }
+                },
+            )
+            is True
+        )
+
+    # Flow started for discovered bridge
+    assert len(hass.config_entries.flow.async_progress()) == 1
+
+    # Config stored for domain.
+    assert hass.data[hue.DATA_CONFIGS] == {
+        "0.0.0.0": {
+            hue.CONF_HOST: "0.0.0.0",
+            hue.CONF_ALLOW_HUE_GROUPS: False,
+            hue.CONF_ALLOW_UNREACHABLE: True,
+        },
+        "1.1.1.1": {hue.CONF_HOST: "1.1.1.1"},
+    }
